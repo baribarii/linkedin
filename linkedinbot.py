@@ -3,6 +3,8 @@ import time
 import datetime
 import glob
 import re
+import json
+import base64
 import pandas as pd
 import keyring  # macOS Keychain 활용
 
@@ -16,22 +18,44 @@ from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
 # ====================================
-# 1. Google Sheets API 설정
+# 1. 구글 스프레드시트 API 인증 설정
 # ====================================
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SERVICE_ACCOUNT_FILE = 'compelling-pen-456906-q0-f280b92105f7.json'
+
+# 환경변수 이름을 'LINKEDIN_GOOGLESHEET_API'로 사용 (Base64 인코딩된 서비스 계정 JSON 문자열)
+encoded_creds = os.getenv("LINKEDIN_GOOGLESHEET_API")
+if encoded_creds:
+    try:
+        # Base64 디코딩하여 문자열 얻기
+        json_creds = base64.b64decode(encoded_creds).decode("utf-8")
+    except Exception as e:
+        raise ValueError("Base64 디코딩에 실패했습니다: " + str(e))
+    
+    # 임시 파일로 저장
+    with open("service_account_temp.json", "w") as f:
+        f.write(json_creds)
+    SERVICE_ACCOUNT_FILE = "service_account_temp.json"
+    print("[INFO] SERVICE_ACCOUNT_FILE created from env LINKEDIN_GOOGLESHEET_API.")
+else:
+    # 로컬 실행 시 환경변수가 없다면, 로컬 파일을 사용
+    SERVICE_ACCOUNT_FILE = "compelling-pen-456906-q0-f280b92105f7.json"
+    print("[INFO] Using local service account file:", SERVICE_ACCOUNT_FILE)
+
+if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
+    raise FileNotFoundError("Service account JSON is not provided or file not found.")
+
 creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 
-# 스프레드시트 ID와 시트 이름
+# 스프레드시트 ID와 시트 이름 (요청하신 값)
 SPREADSHEET_ID = '1fQTqTrNGwSNGi9EzyK8A2ZqU48IbXG-YrL2ImhXm74w'
 SHEET_NAME = '시트4'
+
 service = build('sheets', 'v4', credentials=creds)
 
 # ====================================
 # 2. 스프레드시트에서 C2 셀의 feed URL을 읽어 Analytics URL 생성
 # ====================================
 def get_analytics_url():
-    # C2 셀의 값 읽기
     sheet_range = f"{SHEET_NAME}!C2"
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -42,7 +66,6 @@ def get_analytics_url():
         print("C2 셀의 값이 없습니다.")
         return None
     feed_url = values[0][0].strip()
-    # 예: https://www.linkedin.com/feed/update/urn:li:activity:{id}/
     try:
         if "urn:li:activity:" in feed_url:
             id_part = feed_url.split("urn:li:activity:")[1].split("/")[0]
@@ -60,7 +83,6 @@ def get_analytics_url():
 # ====================================
 def init_driver(download_dir):
     chrome_options = Options()
-    # 자동화 특성을 낮추기 위한 옵션
     chrome_options.add_argument(
         "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -69,8 +91,8 @@ def init_driver(download_dir):
     chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    # headless 모드를 원하면 주석 해제: chrome_options.add_argument("--headless")
     
-    # 다운로드 폴더 설정
     prefs = {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -87,12 +109,11 @@ def init_driver(download_dir):
 # 4. macOS Keychain을 통한 LinkedIn 자동 로그인
 # ====================================
 def login_linkedin(driver):
-    # Keychain에서 "LinkedIn" 서비스로 저장된 정보를 불러옴
     linkedin_email = keyring.get_password("LinkedIn", "email")
     linkedin_password = keyring.get_password("LinkedIn", "password")
     
     if not linkedin_email or not linkedin_password:
-        print("Keychain에서 LinkedIn 로그인 정보를 찾을 수 없습니다.")
+        print("[ERROR] Keychain에서 LinkedIn 로그인 정보를 찾을 수 없습니다.")
         return False
     
     driver.get("https://www.linkedin.com/login")
@@ -119,14 +140,14 @@ def login_linkedin(driver):
     return True
 
 # ====================================
-# 5. XLSX 파일 다운로드 함수 (Analytics 페이지에서)
+# 5. Analytics 페이지에서 XLSX 파일 다운로드
 # ====================================
 def download_xlsx(driver, download_wait=10):
     try:
         download_button = driver.find_element(By.XPATH, "//button[contains(., 'Download') or contains(., '다운로드')]")
         download_button.click()
     except Exception as e:
-        print("다운로드 버튼을 찾지 못했습니다:", e)
+        print("[ERROR] 다운로드 버튼을 찾지 못했습니다:", e)
         return False
     time.sleep(download_wait)
     return True
@@ -135,29 +156,21 @@ def download_xlsx(driver, download_wait=10):
 # 6. 최근에 다운로드된 XLSX 파일 찾기
 # ====================================
 def get_latest_xlsx(download_dir):
-    list_of_files = glob.glob(os.path.join(download_dir, "*.xlsx"))
-    if not list_of_files:
+    files = glob.glob(os.path.join(download_dir, "*.xlsx"))
+    if not files:
         return None
-    latest_file = max(list_of_files, key=os.path.getctime)
-    return latest_file
+    return max(files, key=os.path.getctime)
 
 # ====================================
-# 7. 날짜 및 시간 문자열을 합쳐서 변환하는 함수
+# 7. 게시일과 게시시간 결합 후 날짜 문자열 생성
 # ====================================
 def parse_date_time_strings(date_str, time_str):
-    """
-    date_str: 예, "2025년 4월 1일"
-    time_str: 예, "오전 6:26" 또는 "오후 3:15"
-    return: "YYYY-MM-DD HH:MM:SS"
-    """
-    # 1) 날짜 파싱
     m = re.match(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", date_str.strip())
     if m:
         year, month, day = map(int, m.groups())
     else:
         year, month, day = 1970, 1, 1
 
-    # 2) 시간 파싱
     is_am = "오전" in time_str
     is_pm = "오후" in time_str
     t = time_str.replace("오전", "").replace("오후", "").strip()
@@ -176,25 +189,9 @@ def parse_date_time_strings(date_str, time_str):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 # ====================================
-# 8. XLSX 파일 파싱 함수 (실적 시트)
+# 8. XLSX 파일 파싱 (실적 시트)
 # ====================================
 def parse_excel(file_path):
-    """
-    '실적' 시트에서 각 행의 A열(메트릭 이름)을 읽어 해당 B열의 값을 추출한다.
-    
-    지원 메트릭:
-      - "impression" 또는 "노출"          → exposure
-      - "members reached" 또는 "회원 도달"  → reached
-      - "reactions" 또는 "반응"            → reactions
-      - "comments" 또는 "댓글"             → comments
-      - "reposts" 또는 "퍼감"              → reposts
-      - "게시일"                           → post_date
-      - "게시시간"                         → post_time
-      
-    게시일과 게시시간 값을 모두 읽어 있을 경우 결합하여 최종 게시시간 문자열("YYYY-MM-DD HH:MM:SS")을 생성한다.
-    만약 게시일 또는 게시시간이 없으면, 현재 시간을 사용한다.
-    """
-    # 매핑: 두 개의 게시 관련 키를 분리하여 설정
     mapping = {
         "impression": "exposure",
         "노출": "exposure",
@@ -209,7 +206,8 @@ def parse_excel(file_path):
         "게시일": "post_date",
         "게시 시간": "post_time"
     }
-    # 초기값: 게시일과 게시시간은 각각 None, 기타 메트릭은 None
+    mapping = { k.lower(): v for k, v in mapping.items() }
+    
     metrics = {
         "exposure": None,
         "reached": None,
@@ -222,7 +220,7 @@ def parse_excel(file_path):
     try:
         df = pd.read_excel(file_path, sheet_name="실적", header=None)
     except Exception as e:
-        print("엑셀 파일 읽기 중 에러:", e)
+        print("엑셀 파일 읽기 에러:", e)
         return None
 
     for idx, row in df.iterrows():
@@ -237,10 +235,8 @@ def parse_excel(file_path):
                 value = ""
             metrics[metric_key] = value
 
-    # 나머지 메트릭은 수치로 변환 (게시일/게시시간 제외)
     for k in ["exposure", "reached", "reactions", "comments", "reposts"]:
         try:
-            # 값이 문자열이면 float 변환, 아니면 0
             if metrics[k] == "" or metrics[k] is None:
                 metrics[k] = 0
             else:
@@ -248,12 +244,9 @@ def parse_excel(file_path):
         except Exception:
             metrics[k] = 0
 
-    # 게시일과 게시시간을 결합
     if metrics["post_date"] and metrics["post_time"]:
         post_time_str = parse_date_time_strings(metrics["post_date"], metrics["post_time"])
-
     else:
-        # 둘 중 하나라도 없으면 현재 KST 기준 시간 사용
         pt = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
         post_time_str = pt.strftime("%Y-%m-%d %H:%M:%S")
     
@@ -261,10 +254,9 @@ def parse_excel(file_path):
             metrics["comments"], metrics["reposts"], post_time_str)
 
 # ====================================
-# 9. 구글 스프레드시트에 기록 함수
+# 9. 구글 스프레드시트 업데이트
 # ====================================
 def write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_index):
-    # 메트릭 5개를 C~G열에 기록
     values = [[exposure, reached, reactions, comments, reposts]]
     range_data = f"{SHEET_NAME}!C{row_index}:G{row_index}"
     service.spreadsheets().values().update(
@@ -275,7 +267,6 @@ def write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_
     ).execute()
 
 def write_post_time_to_sheet(post_time_str):
-    # 게시시간을 G2 셀에 덮어쓰기 (형식 "YYYY-MM-DD HH:mm:ss")
     range_data = f"{SHEET_NAME}!G2"
     service.spreadsheets().values().update(
          spreadsheetId=SPREADSHEET_ID,
@@ -285,7 +276,7 @@ def write_post_time_to_sheet(post_time_str):
     ).execute()
 
 # ====================================
-# 10. 메인 실행 함수
+# 10. 메인 실행 함수 (한 회차 실행)
 # ====================================
 def main():
     download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
@@ -299,48 +290,49 @@ def main():
     
     analytics_url = get_analytics_url()
     if analytics_url is None:
-        print("Analytics URL을 생성하지 못했습니다.")
+        print("Analytics URL 생성 실패.")
         driver.quit()
         return
-    print("생성된 Analytics URL:", analytics_url)
+    print("[INFO] Analytics URL:", analytics_url)
     
     driver.get(analytics_url)
-    time.sleep(5)  # 페이지 로드 대기
+    time.sleep(5)
     
     if not download_xlsx(driver, download_wait=10):
         print("다운로드 실패.")
         driver.quit()
         return
-    
+
     file_path = get_latest_xlsx(download_dir)
     if not file_path:
-        print("다운로드한 XLSX 파일을 찾을 수 없습니다.")
+        print("다운로드된 XLSX 파일을 찾을 수 없습니다.")
         driver.quit()
         return
-    print("다운로드 파일 경로:", file_path)
+    print("[INFO] 다운로드 파일 경로:", file_path)
     
     parsed = parse_excel(file_path)
     if not parsed:
-        print("엑셀 파싱 중 에러 발생.")
+        print("엑셀 파싱 중 에러.")
         driver.quit()
         return
     exposure, reached, reactions, comments, reposts, post_time_str = parsed
-    print(f"추출 데이터: 노출={exposure}, 회원 도달={reached}, 반응={reactions}, 댓글={comments}, 퍼감={reposts}, 게시시간={post_time_str}")
+    print(f"[INFO] 추출 데이터: 노출={exposure}, 회원 도달={reached}, 반응={reactions}, "
+          f"댓글={comments}, 퍼감={reposts}, 게시시간={post_time_str}")
     
-    write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_index=4)
-    print("[스프레드시트] 메트릭 기록 완료.")
+    row_index = 4
+    write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_index)
+    print(f"[INFO] {SHEET_NAME} 시트 {row_index}행에 메트릭 기록 완료.")
     
     write_post_time_to_sheet(post_time_str)
-    print(f"[스프레드시트] G2 셀에 게시시간({post_time_str}) 기록 완료.")
+    print(f"[INFO] G2 셀에 게시시간({post_time_str}) 기록 완료.")
     
     try:
         os.remove(file_path)
     except Exception as e:
-        print("XLSX 파일 삭제 중 에러:", e)
+        print("XLSX 파일 삭제 에러:", e)
     
     driver.quit()
-    print("작업 완료.")
-    
+    print("\n[INFO] 작업 완료.")
+
 if __name__ == "__main__":
     main()
-
