@@ -12,6 +12,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
+      - name: Debug file list
+        run: |
+          ls -al
+          ls -al linkedin-bot
+
       - name: Set up Python
         uses: actions/setup-python@v3
         with:
