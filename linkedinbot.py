@@ -92,9 +92,9 @@ def init_driver(download_dir):
     chrome_options.add_experimental_option('useAutomationExtension', False)
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     # GitHub Actions 같은 CI 환경에서는 헤드리스 모드가 필요할 수 있음
-    # chrome_options.add_argument("--headless")
-    # chrome_options.add_argument("--no-sandbox")
-    # chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
 
     prefs = {
         "download.default_directory": download_dir,

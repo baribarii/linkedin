@@ -22,6 +22,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # --- (필수) Chrome 설치 스텝 ---
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser
+
       - name: Run LinkedIn Bot
         env:
           LINKEDIN_GOOGLESHEET_API: ${{ secrets.LINKEDIN_GOOGLESHEET_API }}
