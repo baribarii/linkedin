@@ -2,15 +2,12 @@ name: Run LinkedIn Bot Every Hour
 
 on:
   schedule:
-    # 매 정각(분=0)에 한 번씩 실행
-    - cron: '0 * * * *'
-  # 필요하면 수동 실행도 가능
+    - cron: '0 * * * *' # 매 정각 실행
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v3
@@ -18,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v3
         with:
-          python-version: '3.9' # 원하는 버전으로 수정
+          python-version: '3.9'
 
       - name: Install dependencies
         run: |
@@ -26,8 +23,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run LinkedIn Bot
-        # GitHub Secrets에 등록된 LINKEDIN_GOOGLESHEET_API 값을 환경변수로 주입
         env:
           LINKEDIN_GOOGLESHEET_API: ${{ secrets.LINKEDIN_GOOGLESHEET_API }}
+          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
         run: |
           python linkedinbot.py

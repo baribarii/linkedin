@@ -4,9 +4,7 @@ import datetime
 import glob
 import re
 import json
-import base64
 import pandas as pd
-import keyring  # macOS Keychain 활용
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -18,31 +16,23 @@ from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
 # ====================================
-# 1. 구글 스프레드시트 API 인증 (Repository Secrets)
+# 1. 구글 스프레드시트 API 인증 (Secrets)
 # ====================================
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
-encoded_creds = os.getenv("LINKEDIN_GOOGLESHEET_API")
-if not encoded_creds:
-    raise EnvironmentError("env LINKEDIN_GOOGLESHEET_API not set")
+# GitHub Secrets로부터 Plain JSON 형태로 받은 경우
+google_sheet_api_json = os.getenv("LINKEDIN_GOOGLESHEET_API")
+if not google_sheet_api_json:
+    raise EnvironmentError("환경변수 LINKEDIN_GOOGLESHEET_API가 설정되지 않았습니다.")
 
-import base64
-json_creds = base64.b64decode(encoded_creds).decode("utf-8")
-
-with open("service_account_temp.json", "w") as f:
-    f.write(json_creds)
-
-# 임시 파일 생성
+# 파일로 저장
 SERVICE_ACCOUNT_FILE = "service_account_temp.json"
-with open(SERVICE_ACCOUNT_FILE, "w") as f:
-    f.write(json_creds)
-
-if not os.path.exists(SERVICE_ACCOUNT_FILE):
-    raise FileNotFoundError(f"{SERVICE_ACCOUNT_FILE} not found after decoding credentials.")
+with open(SERVICE_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+    f.write(google_sheet_api_json)
 
 creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 
-# 요청하신 스프레드시트 ID와 시트 이름
+# 스프레드시트 정보
 SPREADSHEET_ID = '1fQTqTrNGwSNGi9EzyK8A2ZqU48IbXG-YrL2ImhXm74w'
 SHEET_NAME = '시트4'
 
@@ -64,8 +54,6 @@ def get_analytics_url():
         return None
 
     feed_url = values[0][0].strip()
-    # 예: 'https://www.linkedin.com/feed/update/urn:li:activity:7313496722683371520/'
-
     try:
         if "urn:li:activity:" in feed_url:
             id_part = feed_url.split("urn:li:activity:")[1].split("/")[0]
@@ -78,14 +66,7 @@ def get_analytics_url():
         print("Analytics URL 생성 중 에러:", e)
         return None
 
-# ====================================
-# 2. 스프레드시트에서 현재 몇 행까지 사용 중인지 확인 -> 다음 행 번호 결정
-# ====================================
 def get_next_row_index():
-    """
-    C열(C4부터 시작)에 얼마나 데이터가 채워져 있는지 보고,
-    다음에 쓸 행 번호를 반환한다.
-    """
     read_range = f"{SHEET_NAME}!C4:C"
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -93,12 +74,12 @@ def get_next_row_index():
         majorDimension='ROWS'
     ).execute()
 
-    values = result.get('values', [])
-    used_count = len(values)  # 실제 데이터 개수
-    return 4 + used_count  # 다음 행 번호
+    rows = result.get('values', [])
+    used_count = len(rows)
+    return 4 + used_count
 
 # ====================================
-# 3. Selenium 웹드라이버 설정 (Chrome)
+# 3. Selenium 웹드라이버 설정
 # ====================================
 def init_driver(download_dir):
     chrome_options = Options()
@@ -110,6 +91,10 @@ def init_driver(download_dir):
     chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    # GitHub Actions 같은 CI 환경에서는 헤드리스 모드가 필요할 수 있음
+    # chrome_options.add_argument("--headless")
+    # chrome_options.add_argument("--no-sandbox")
+    # chrome_options.add_argument("--disable-dev-shm-usage")
 
     prefs = {
         "download.default_directory": download_dir,
@@ -124,14 +109,14 @@ def init_driver(download_dir):
     return driver
 
 # ====================================
-# 4. macOS Keychain을 통한 LinkedIn 자동 로그인
+# 4. LinkedIn 자동 로그인 (Secrets → env)
 # ====================================
 def login_linkedin(driver):
-    linkedin_email = keyring.get_password("LinkedIn", "email")
-    linkedin_password = keyring.get_password("LinkedIn", "password")
+    linkedin_email = os.getenv("LINKEDIN_EMAIL")
+    linkedin_password = os.getenv("LINKEDIN_PASSWORD")
 
     if not linkedin_email or not linkedin_password:
-        print("[ERROR] Keychain에서 LinkedIn 로그인 정보를 찾을 수 없습니다.")
+        print("[ERROR] LINKEDIN_EMAIL 또는 LINKEDIN_PASSWORD 환경변수가 설정되지 않았습니다.")
         return False
 
     driver.get("https://www.linkedin.com/login")
@@ -158,7 +143,7 @@ def login_linkedin(driver):
     return True
 
 # ====================================
-# 5. Analytics 페이지에서 XLSX 파일 다운로드
+# 5. Analytics 페이지 XLSX 다운로드
 # ====================================
 def download_xlsx(driver, download_wait=10):
     try:
@@ -170,9 +155,6 @@ def download_xlsx(driver, download_wait=10):
     time.sleep(download_wait)
     return True
 
-# ====================================
-# 6. 최근에 다운로드된 XLSX 파일 찾기
-# ====================================
 def get_latest_xlsx(download_dir):
     files = glob.glob(os.path.join(download_dir, "*.xlsx"))
     if not files:
@@ -180,9 +162,6 @@ def get_latest_xlsx(download_dir):
     latest_file = max(files, key=os.path.getctime)
     return latest_file
 
-# ====================================
-# 7. 게시일+게시시간을 조합 → 날짜 문자열
-# ====================================
 def parse_date_time_strings(date_str, time_str):
     m = re.match(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", date_str.strip())
     if m:
@@ -206,9 +185,6 @@ def parse_date_time_strings(date_str, time_str):
     dt = datetime.datetime(year, month, day, hour, minute, 0)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
-# ====================================
-# 8. XLSX 파일 파싱 (실적 시트)
-# ====================================
 def parse_excel(file_path):
     mapping = {
         "impression": "exposure",
@@ -256,7 +232,7 @@ def parse_excel(file_path):
     # 수치 메트릭 변환
     for k in ["exposure", "reached", "reactions", "comments", "reposts"]:
         try:
-            if metrics[k] == "" or metrics[k] is None:
+            if not metrics[k]:
                 metrics[k] = 0
             else:
                 metrics[k] = float(metrics[k])
@@ -269,16 +245,16 @@ def parse_excel(file_path):
         pt = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
         post_time_str = pt.strftime("%Y-%m-%d %H:%M:%S")
 
-    return (metrics["exposure"], metrics["reached"], metrics["reactions"],
-            metrics["comments"], metrics["reposts"], post_time_str)
+    return (
+        metrics["exposure"],
+        metrics["reached"],
+        metrics["reactions"],
+        metrics["comments"],
+        metrics["reposts"],
+        post_time_str
+    )
 
-# ====================================
-# 9. 구글 스프레드시트 업데이트
-# ====================================
 def write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_index):
-    """
-    row_index 행에 (C, D, E, F, G) 순서로 메트릭 기록
-    """
     values = [[exposure, reached, reactions, comments, reposts]]
     range_data = f"{SHEET_NAME}!C{row_index}:G{row_index}"
     service.spreadsheets().values().update(
@@ -289,9 +265,6 @@ def write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_
     ).execute()
 
 def write_post_time_to_sheet(post_time_str):
-    """
-    G2 셀에 게시 시간(날짜) 기록
-    """
     range_data = f"{SHEET_NAME}!G2"
     service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
@@ -300,24 +273,6 @@ def write_post_time_to_sheet(post_time_str):
         body={'values': [[post_time_str]]}
     ).execute()
 
-# ====================================
-# 10. 다음 사용할 행 번호 계산
-# ====================================
-def get_next_row_index():
-    read_range = f"{SHEET_NAME}!C4:C"
-    result = service.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range=read_range,
-        majorDimension='ROWS'
-    ).execute()
-
-    rows = result.get('values', [])
-    used_count = len(rows)
-    return 4 + used_count
-
-# ====================================
-# 11. 메인 실행 함수 (한 번 실행)
-# ====================================
 def main():
     download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
     driver = init_driver(download_dir)
@@ -355,6 +310,7 @@ def main():
         print("엑셀 파싱 중 에러.")
         driver.quit()
         return
+
     exposure, reached, reactions, comments, reposts, post_time_str = parsed
     print(f"[INFO] 추출 데이터: 노출={exposure}, 회원 도달={reached}, "
           f"반응={reactions}, 댓글={comments}, 퍼감={reposts}, 게시시간={post_time_str}")
