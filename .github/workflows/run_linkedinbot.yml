@@ -40,3 +40,14 @@ jobs:
           LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
         run: |
           python linkedinbot.py
+
+      - name: List files after run (debug)
+        run: ls -al
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }} # 실패해도 실행
+        with:
+          name: debug-screenshot
+          path: screen.png
+          if-no-files-found: ignore
