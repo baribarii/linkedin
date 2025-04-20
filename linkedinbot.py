@@ -126,6 +126,9 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")  # 화면 크기 키우기
     chrome_options.add_argument("--lang=en-US")              # UI를 영문으로 고정
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--remote-debugging-port=9222")
 
     prefs = {
         "download.default_directory": download_dir,
