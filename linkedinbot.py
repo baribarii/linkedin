@@ -167,15 +167,17 @@ def download_xlsx(driver, wait_sec: int = 30) -> bool:
     wait = WebDriverWait(driver, wait_sec)
 
     selectors = [
-        # 1) 가장 정확: data-test 속성
-        (By.CSS_SELECTOR, "button[data-test-export-button]"),
-        # 2) aria-label 에 Export / Download 포함
-        (By.XPATH, "//button[contains(@aria-label,'Export') or contains(@aria-label,'Download') or contains(@aria-label,'다운로드')]"),
-        # 3) 버튼 텍스트가 Export / Download / 다운로드 인 경우
-        (By.XPATH, "//button[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'export') "
-                   "or contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'download') "
-                   "or contains(text(),'다운로드')]"),
+    # 1) 자식 <span> 안의 한국어 텍스트
+    (By.XPATH, "//button[span[contains(text(),'다운로드')]]"),
+
+    # 2) 영어 UI 대비: <span> 안에 Download / Export
+    (By.XPATH, "//button[span[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'download') "
+               "or contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'export')]]"),
+
+    # 3) 클래스 기반 백업
+    (By.CSS_SELECTOR, "button.artdeco-button--primary"),
     ]
+
 
     btn = None
     for by, sel in selectors:
