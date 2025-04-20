@@ -163,25 +163,33 @@ def login_linkedin(driver: webdriver.Chrome) -> bool:
 # 6. Analytics XLSX 다운로드 + 파싱
 # ------------------------------------------------
 def download_xlsx(driver, wait_sec: int = 30) -> bool:
-    """Analytics 화면에서 XLSX 다운로드 버튼을 찾아 클릭"""
+    """Analytics 화면에서 XLSX 다운로드 버튼 클릭 (headless 안전판 포함)"""
     wait = WebDriverWait(driver, wait_sec)
 
-    # 1) data‑test 속성이 가장 확실함
-    try:
-        btn = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "button[data-test-export-button]"))
-        )
-    except Exception:
-        # 2) 백업: 영문/국문 텍스트로 찾기
-        try:
-            xpath = ("//button[normalize-space()[contains(.,'Download')"
-                     " or contains(.,'Export') or contains(.,'다운로드')]]")
-            btn = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
-        except Exception as e:
-            print("[ERROR] 다운로드 버튼 탐색 실패:", e)
-            return False
+    selectors = [
+        # 1) 가장 정확: data-test 속성
+        (By.CSS_SELECTOR, "button[data-test-export-button]"),
+        # 2) aria-label 에 Export / Download 포함
+        (By.XPATH, "//button[contains(@aria-label,'Export') or contains(@aria-label,'Download') or contains(@aria-label,'다운로드')]"),
+        # 3) 버튼 텍스트가 Export / Download / 다운로드 인 경우
+        (By.XPATH, "//button[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'export') "
+                   "or contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'download') "
+                   "or contains(text(),'다운로드')]"),
+    ]
 
-    # 버튼이 화면 밖에 있으면 스크롤 후 클릭
+    btn = None
+    for by, sel in selectors:
+        try:
+            btn = wait.until(EC.element_to_be_clickable((by, sel)))
+            break
+        except Exception:
+            continue  # 다음 셀렉터 시도
+
+    if not btn:
+        print("[ERROR] 다운로드 버튼을 찾을 수 없습니다 (모든 셀렉터 실패).")
+        return False
+
+    # 클릭 직전: 뷰로 스크롤 후 클릭
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
         driver.execute_script("arguments[0].click();", btn)
@@ -189,9 +197,8 @@ def download_xlsx(driver, wait_sec: int = 30) -> bool:
         print("[ERROR] 클릭 실패:", e)
         return False
 
-    time.sleep(10)  # 파일 다운로드 완료 대기
+    time.sleep(10)  # 파일 내려올 때까지 대기
     return True
-
 
 def get_latest_xlsx(download_dir: str) -> str | None:
     files = glob.glob(os.path.join(download_dir, "*.xlsx"))
