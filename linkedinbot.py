@@ -192,6 +192,7 @@ def download_xlsx(driver, wait_sec: int = 30) -> bool:
     # 클릭 직전: 뷰로 스크롤 후 클릭
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        driver.save_screenshot("screen.png")
         driver.execute_script("arguments[0].click();", btn)
     except Exception as e:
         print("[ERROR] 클릭 실패:", e)
