@@ -15,7 +15,7 @@ jobs:
       - name: Debug file list
         run: |
           ls -al
-          ls -al linkedin-bot
+          ls -al linkedinbot.py
 
       - name: Set up Python
         uses: actions/setup-python@v3
