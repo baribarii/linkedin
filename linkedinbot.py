@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LinkedIn 포스트 데이터를 주기적으로 Google 스프레드시트에 기록
+LinkedIn 포스트 데이터를 주기적으로 Google 스프레드시트에 기록
 로컬(macOS): 키체인 ‘LinkedIn’ 항목(email / password) 사용
-CI(GitHub Actions): 환경변수 + Secrets(Base64) 사용
+CI(GitHub Actions): 환경변수 + Secrets(Base64) 사용
 """
 
 import os
+import sys
 import time
 import datetime
 import glob
@@ -37,7 +38,7 @@ except ImportError:
 # ------------------------------------------------
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
-LOCAL_KEY_PATH = os.path.expanduser("~/Downloads/my_new_key.json")   # ← 로컬 키 이름
+LOCAL_KEY_PATH = os.path.expanduser("~/Downloads/my_new_key.json")
 CI_KEY_PATH    = "service_account_temp.json"
 
 if os.path.exists(LOCAL_KEY_PATH):
@@ -61,11 +62,10 @@ SHEET_NAME     = '시트4'
 # 2. LinkedIn 로그인 정보
 # ------------------------------------------------
 def get_linkedin_credentials():
-    """키체인 → 환경변수 순으로 이메일·비밀번호를 찾는다."""
     email    = os.getenv("LINKEDIN_EMAIL")
     password = os.getenv("LINKEDIN_PASSWORD")
 
-    if platform.system() == "Darwin" and keyring is not None and (not email or not password):
+    if platform.system() == "Darwin" and keyring:
         try:
             if not email:
                 email = keyring.get_password("LinkedIn", "email")
@@ -73,19 +73,16 @@ def get_linkedin_credentials():
                 password = keyring.get_password("LinkedIn", "password")
         except Exception as e:
             print("[WARN] 키체인 읽기 실패:", e)
-
     return email, password
 
 # ------------------------------------------------
 # 3. 스프레드시트 유틸
 # ------------------------------------------------
 def get_analytics_url() -> str | None:
-    """시트 C2 셀에서 활동 ID를 읽어 Analytics URL로 변환"""
     cell = f"{SHEET_NAME}!C2"
     values = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range=cell
     ).execute().get("values", [])
-
     if not values:
         print("C2 셀에 URL이 없습니다.")
         return None
@@ -94,13 +91,10 @@ def get_analytics_url() -> str | None:
     if "urn:li:activity:" in feed_url:
         act_id = feed_url.split("urn:li:activity:")[1].split("/")[0]
         return f"https://www.linkedin.com/analytics/post-summary/urn:li:activity:{act_id}/"
-
     print("URL 형식이 잘못되었습니다. 예) urn:li:activity:1234567890")
     return None
 
-
 def get_next_row_index() -> int:
-    """다음 기록할 행 번호(C열 기준)"""
     rng = f"{SHEET_NAME}!C4:C"
     rows = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range=rng, majorDimension='ROWS'
@@ -108,27 +102,30 @@ def get_next_row_index() -> int:
     return 4 + len(rows)
 
 # ------------------------------------------------
-# 4. Selenium 웹드라이버
+# 4. Selenium 웹드라이버 (로컬 + CI 공통)
 # ------------------------------------------------
 def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options = Options()
-    # GitHub Actions 에서 chromium-browser 경로 지정
-    chrome_options.binary_location = "/usr/bin/chromium-browser"
+    # CI 환경(Linux)에서만 chromium-browser 사용
+    if platform.system() == "Linux":
+        chrome_options.binary_location = "/usr/bin/chromium-browser"
+
+    # 헤드리스 모드 (새 Chrome 헤드리스)
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-gpu")
+    # UI 언어 고정이 필요하면 주석 해제
+    # chrome_options.add_argument("--lang=ko-KR")
+
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument(
         "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")  # 화면 크기 키우기
-    chrome_options.add_argument("--lang=en-US")              # UI를 영문으로 고정
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--remote-debugging-port=9222")
 
     prefs = {
         "download.default_directory": download_dir,
@@ -152,7 +149,6 @@ def login_linkedin(driver: webdriver.Chrome) -> bool:
 
     driver.get("https://www.linkedin.com/login")
     time.sleep(2)
-
     try:
         driver.find_element(By.ID, "username").send_keys(email)
         driver.find_element(By.ID, "password").send_keys(pwd)
@@ -167,46 +163,63 @@ def login_linkedin(driver: webdriver.Chrome) -> bool:
 # ------------------------------------------------
 # 6. Analytics XLSX 다운로드 + 파싱
 # ------------------------------------------------
-def download_xlsx(driver, wait_sec: int = 30) -> bool:
+def download_xlsx(driver, wait_sec: int = 60) -> bool:
     wait = WebDriverWait(driver, wait_sec)
 
-    # (이전의 More actions 클릭 로직이 있다면 그대로 두셔도 됩니다)
-    # …
-
-    # ① “다운로드” 버튼을 바로 찾는 셀렉터 추가
+    # 가능한 모든 셀렉터를 차례로 시도
     selectors = [
-        # 한국어 “다운로드” 텍스트
-        (By.XPATH, "//button[.//span[contains(text(),'다운로드')]]"),
-        # English UI: Download / Export
-        (By.XPATH, "//li[contains(@class,'artdeco-dropdown__item')]//span[contains(text(),'Download') or contains(text(),'Export')]"),
-        (By.CSS_SELECTOR, "button[aria-label*='Download']"),
-        (By.CSS_SELECTOR, "button[aria-label*='Export']"),
+        # ① 한글 UI: “다운로드” 텍스트 + primary 버튼
+        (By.XPATH,
+         "//button[contains(@class,'artdeco-button--primary') and .//span[contains(normalize-space(.),'다운로드')]]"
+        ),
+        # ② 아이콘 기준 (data-test-icon)
+        (By.XPATH,
+         "//button[.//svg[@data-test-icon='download-small']]"
+        ),
+        # ③ 영어 UI: “Download” 텍스트 + primary 버튼
+        (By.XPATH,
+         "//button[contains(@class,'artdeco-button--primary') and .//span[contains(translate(normalize-space(.),'DOWNLOAD','download'),'download')]]"
+        ),
+        # ④ aria‑label 속성 (영문)
+        (By.XPATH,
+         "//button[@aria-label='Download' or @aria-label='다운로드']"
+        ),
+        # ⑤ CSS: data-control-name (만약 존재한다면)
+        (By.CSS_SELECTOR, "button[data-control-name='download_post_analytics']")
     ]
 
     btn = None
     for by, sel in selectors:
         try:
             btn = wait.until(EC.element_to_be_clickable((by, sel)))
+            print(f"[DEBUG] selector matched: {by} {sel}")
             break
         except Exception:
             continue
 
     if not btn:
         print("[ERROR] 다운로드 버튼을 찾을 수 없습니다 (모든 셀렉터 실패).")
+        # 디버깅: 스크린샷 남기기
+        driver.save_screenshot("ci_fail_download.png")
         return False
 
-    # 스크롤해서 화면에 보이도록 한 뒤 클릭
+    # 화면 중앙으로 스크롤
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-    driver.save_screenshot("screen.png")    # 디버깅용 스크린샷
-    driver.execute_script("arguments[0].click();", btn)
-    time.sleep(10)  # 다운로드 대기
-    return True
+    time.sleep(1)
 
+    # 클릭 시도
+    try:
+        btn.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", btn)
+
+    # 충분한 시간 대기
+    time.sleep(10)
+    return True
 
 def get_latest_xlsx(download_dir: str) -> str | None:
     files = glob.glob(os.path.join(download_dir, "*.xlsx"))
     return max(files, key=os.path.getctime) if files else None
-
 
 def parse_date_time_strings(date_str: str, time_str: str) -> str:
     m = re.match(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", date_str.strip())
@@ -220,7 +233,6 @@ def parse_date_time_strings(date_str: str, time_str: str) -> str:
         hour = 0
     dt = datetime.datetime(y, mth, d, hour, minute)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
-
 
 def parse_excel(path: str):
     mapping = {
@@ -251,7 +263,8 @@ def parse_excel(path: str):
     if metrics["post_date"] and metrics["post_time"]:
         post_time = parse_date_time_strings(metrics["post_date"], metrics["post_time"])
     else:
-        post_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S")
+        post_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)) \
+                        .strftime("%Y-%m-%d %H:%M:%S")
 
     return (
         metrics["exposure"], metrics["reached"], metrics["reactions"],
@@ -268,7 +281,6 @@ def write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_
         body={'values': [[exposure, reached, reactions, comments, reposts]]}
     ).execute()
 
-
 def write_post_time_to_sheet(post_time: str):
     service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID, range=f"{SHEET_NAME}!G2",
@@ -284,27 +296,28 @@ def main():
 
     if not login_linkedin(driver):
         driver.quit()
-        return
+        sys.exit(1)
     print("자동 로그인 성공")
 
     url = get_analytics_url()
     if not url:
         driver.quit()
-        return
+        sys.exit(1)
     print("[INFO] Analytics URL:", url)
 
     driver.get(url)
-    time.sleep(5)
+    # CI 환경이 느릴 수 있으므로 충분히 대기
+    time.sleep(30)
 
     if not download_xlsx(driver):
         driver.quit()
-        return
+        sys.exit(1)
 
     xlsx = get_latest_xlsx(dl_dir)
     if not xlsx:
         print("XLSX 파일을 찾지 못했습니다.")
         driver.quit()
-        return
+        sys.exit(1)
 
     print("[INFO] 파일 경로:", xlsx)
     exposure, reached, reactions, comments, reposts, post_time = parse_excel(xlsx)
@@ -320,7 +333,6 @@ def main():
 
     driver.quit()
     print("[INFO] 작업 완료")
-
 
 if __name__ == "__main__":
     main()
