@@ -112,6 +112,8 @@ def get_next_row_index() -> int:
 # ------------------------------------------------
 def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options = Options()
+    # GitHub Actions 에서 chromium-browser 경로 지정
+    chrome_options.binary_location = "/usr/bin/chromium-browser"
     chrome_options.add_argument(
         "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -163,21 +165,20 @@ def login_linkedin(driver: webdriver.Chrome) -> bool:
 # 6. Analytics XLSX 다운로드 + 파싱
 # ------------------------------------------------
 def download_xlsx(driver, wait_sec: int = 30) -> bool:
-    """Analytics 화면에서 XLSX 다운로드 버튼 클릭 (headless 안전판 포함)"""
     wait = WebDriverWait(driver, wait_sec)
 
+    # (이전의 More actions 클릭 로직이 있다면 그대로 두셔도 됩니다)
+    # …
+
+    # ① “다운로드” 버튼을 바로 찾는 셀렉터 추가
     selectors = [
-    # 1) 자식 <span> 안의 한국어 텍스트
-    (By.XPATH, "//button[span[contains(text(),'다운로드')]]"),
-
-    # 2) 영어 UI 대비: <span> 안에 Download / Export
-    (By.XPATH, "//button[span[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'download') "
-               "or contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'export')]]"),
-
-    # 3) 클래스 기반 백업
-    (By.CSS_SELECTOR, "button.artdeco-button--primary"),
+        # 한국어 “다운로드” 텍스트
+        (By.XPATH, "//button[.//span[contains(text(),'다운로드')]]"),
+        # English UI: Download / Export
+        (By.XPATH, "//li[contains(@class,'artdeco-dropdown__item')]//span[contains(text(),'Download') or contains(text(),'Export')]"),
+        (By.CSS_SELECTOR, "button[aria-label*='Download']"),
+        (By.CSS_SELECTOR, "button[aria-label*='Export']"),
     ]
-
 
     btn = None
     for by, sel in selectors:
@@ -185,23 +186,19 @@ def download_xlsx(driver, wait_sec: int = 30) -> bool:
             btn = wait.until(EC.element_to_be_clickable((by, sel)))
             break
         except Exception:
-            continue  # 다음 셀렉터 시도
+            continue
 
     if not btn:
         print("[ERROR] 다운로드 버튼을 찾을 수 없습니다 (모든 셀렉터 실패).")
         return False
 
-    # 클릭 직전: 뷰로 스크롤 후 클릭
-    try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-        driver.save_screenshot("screen.png")
-        driver.execute_script("arguments[0].click();", btn)
-    except Exception as e:
-        print("[ERROR] 클릭 실패:", e)
-        return False
-
-    time.sleep(10)  # 파일 내려올 때까지 대기
+    # 스크롤해서 화면에 보이도록 한 뒤 클릭
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+    driver.save_screenshot("screen.png")    # 디버깅용 스크린샷
+    driver.execute_script("arguments[0].click();", btn)
+    time.sleep(10)  # 다운로드 대기
     return True
+
 
 def get_latest_xlsx(download_dir: str) -> str | None:
     files = glob.glob(os.path.join(download_dir, "*.xlsx"))
