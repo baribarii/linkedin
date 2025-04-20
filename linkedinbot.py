@@ -19,6 +19,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 from googleapiclient.discovery import build
@@ -120,6 +122,8 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")  # 화면 크기 키우기
+    chrome_options.add_argument("--lang=en-US")              # UI를 영문으로 고정
 
     prefs = {
         "download.default_directory": download_dir,
@@ -158,16 +162,34 @@ def login_linkedin(driver: webdriver.Chrome) -> bool:
 # ------------------------------------------------
 # 6. Analytics XLSX 다운로드 + 파싱
 # ------------------------------------------------
-def download_xlsx(driver: webdriver.Chrome, wait_sec: int = 10) -> bool:
+def download_xlsx(driver, wait_sec: int = 30) -> bool:
+    """Analytics 화면에서 XLSX 다운로드 버튼을 찾아 클릭"""
+    wait = WebDriverWait(driver, wait_sec)
+
+    # 1) data‑test 속성이 가장 확실함
     try:
-        driver.find_element(
-            By.XPATH, "//button[contains(., 'Download') or contains(., '다운로드')]"
-        ).click()
+        btn = wait.until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "button[data-test-export-button]"))
+        )
+    except Exception:
+        # 2) 백업: 영문/국문 텍스트로 찾기
+        try:
+            xpath = ("//button[normalize-space()[contains(.,'Download')"
+                     " or contains(.,'Export') or contains(.,'다운로드')]]")
+            btn = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        except Exception as e:
+            print("[ERROR] 다운로드 버튼 탐색 실패:", e)
+            return False
+
+    # 버튼이 화면 밖에 있으면 스크롤 후 클릭
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        driver.execute_script("arguments[0].click();", btn)
     except Exception as e:
-        print("[ERROR] 다운로드 버튼을 찾을 수 없습니다:", e)
+        print("[ERROR] 클릭 실패:", e)
         return False
 
-    time.sleep(wait_sec)
+    time.sleep(10)  # 파일 다운로드 완료 대기
     return True
 
 
