@@ -62,3 +62,24 @@ jobs:
           which google-chrome
           google-chrome --version
           ls -la /usr/bin/google-chrome*
+
+          - name: Debug network conditions
+          run: |
+            ping -c 4 linkedin.com
+            curl -I https://www.linkedin.com
+
+      - name: Install additional dependencies for LinkedIn
+        run: |
+          sudo apt-get install -y xvfb
+          pip install pyvirtualdisplay
+
+      - name: Run LinkedIn Bot with Xvfb
+        env:
+          LINKEDIN_GOOGLESHEET_API: ${{ secrets.LINKEDIN_GOOGLESHEET_API }}
+          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+          DISPLAY: ':99'
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          sleep 3
+          python linkedinbot.py

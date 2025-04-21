@@ -15,6 +15,7 @@ import re
 import base64
 import platform
 import pandas as pd
+import pickle
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -102,7 +103,7 @@ def get_next_row_index() -> int:
     return 4 + len(rows)
 
 # ------------------------------------------------
-# 4. Selenium 웹드라이버 (로컬 + CI 공통)
+# 4. Selenium 웹드라이버 (로컬 + CI 공통) - 개선됨
 # ------------------------------------------------
 def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options = Options()
@@ -120,18 +121,27 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument("--disable-extensions")
     
-    # 봇 탐지 방지 추가 설정
+    # 봇 탐지 방지 추가 설정 (개선)
     chrome_options.add_argument("--disable-blink-features")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    # 쿠키 및 캐시 활성화 (추가)
+    chrome_options.add_argument("--enable-cookies")
+    chrome_options.add_argument("--profile-directory=Default")
+    
+    # 더 현실적인 사용자 에이전트 (최신 버전으로 업데이트)
+    chrome_options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    )
+    
+    # 추가 실행 옵션
+    chrome_options.add_argument("--lang=en-US,en;q=0.9")
 
     chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-
+    
     prefs = {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -141,10 +151,15 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_experimental_option("prefs", prefs)
 
     service_obj = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service_obj, options=chrome_options)
+    driver = webdriver.Chrome(service=service_obj, options=chrome_options)
+    
+    # WebDriver 속성 마스킹 (추가 JavaScript 실행)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    
+    return driver
 
 # ------------------------------------------------
-# 5. LinkedIn 로그인
+# 5. LinkedIn 로그인 (기존 함수 유지)
 # ------------------------------------------------
 def login_linkedin(driver: webdriver.Chrome) -> bool:
     email, pwd = get_linkedin_credentials()
@@ -166,7 +181,100 @@ def login_linkedin(driver: webdriver.Chrome) -> bool:
     return True
 
 # ------------------------------------------------
-# 6. Analytics XLSX 다운로드 + 파싱
+# 6. 로그인 후 인증 확인 (새 함수 추가)
+# ------------------------------------------------
+def handle_login_verification(driver):
+    """로그인 후 추가 인증 또는 보안 확인 페이지 처리"""
+    time.sleep(5)  # 페이지 로드 대기
+    
+    # CAPTCHA 또는 보안 확인 감지
+    security_prompts = [
+        "security verification", "보안 확인", "verify it's you", 
+        "자동화된 접근", "automated access", "captcha", "퍼즐",
+        "unusual login", "비정상적인 로그인"
+    ]
+    
+    page_source = driver.page_source.lower()
+    
+    # 보안 확인 페이지 감지
+    for prompt in security_prompts:
+        if prompt in page_source:
+            print(f"[WARN] 보안 확인 감지: '{prompt}'")
+            driver.save_screenshot("security_challenge.png")
+            return False
+    
+    # 현재 URL 확인
+    current_url = driver.current_url
+    if "checkpoint" in current_url or "security-verification" in current_url:
+        print(f"[WARN] 보안 검증 URL 감지: {current_url}")
+        driver.save_screenshot("security_url.png")
+        return False
+    
+    # LinkedIn 홈페이지 확인
+    if "/feed" in current_url:
+        print("[INFO] LinkedIn 홈 페이지 확인됨")
+        return True
+    
+    return True
+
+# ------------------------------------------------
+# 7. Analytics 페이지 대기 (새 함수 추가)
+# ------------------------------------------------
+def wait_for_analytics_page(driver, timeout=90):
+    """Analytics 페이지가 로드될 때까지 기다립니다."""
+    print("[INFO] Analytics 페이지 로드 대기...")
+    
+    try:
+        # 더 긴 타임아웃과 명시적 대기 조건
+        WebDriverWait(driver, timeout).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+        
+        # 더 넓은 범위의 선택자 사용
+        selectors = [
+            "main.scaffold-layout__main", 
+            "div.scaffold-layout__main",
+            "div[data-test-id='post-analytics']",
+            "div[data-control-name='analytics']",
+            "div.analytics",
+            "section.insights-module"
+        ]
+        
+        for selector in selectors:
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                print(f"[INFO] 발견된 Analytics 요소: {selector}")
+                return True
+            except:
+                pass
+        
+        # JavaScript로 페이지 상태 확인
+        js_result = driver.execute_script("""
+            return {
+                title: document.title,
+                url: window.location.href,
+                hasLoginForm: !!document.querySelector('form#login'),
+                hasAnalyticsContent: !!document.querySelector('.analytics, [data-control-name*="analytics"]'),
+                bodyText: document.body.innerText.substring(0, 200)
+            }
+        """)
+        
+        print(f"[DEBUG] 페이지 상태: {js_result}")
+        
+        # 페이지 소스 저장 (디버깅용)
+        with open("page_source.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        
+        return js_result.get('hasAnalyticsContent', False)
+        
+    except Exception as e:
+        print(f"[ERROR] Analytics 페이지 대기 실패: {e}")
+        return False
+
+# ------------------------------------------------
+# 8. 페이지 로드 대기 (기존 함수 유지)
 # ------------------------------------------------
 def wait_for_page_load(driver, timeout=60):
     """페이지가 완전히 로드될 때까지 기다립니다."""
@@ -209,6 +317,9 @@ def wait_for_page_load(driver, timeout=60):
     
     return True
 
+# ------------------------------------------------
+# 9. 페이지 구조 분석 (기존 함수 유지)
+# ------------------------------------------------
 def analyze_page_structure(driver):
     """페이지 구조를 분석하여 디버깅에 도움이 되는 정보를 수집합니다."""
     print("[DEBUG] 페이지 구조 분석 시작...")
@@ -250,6 +361,9 @@ def analyze_page_structure(driver):
     
     return True
 
+# ------------------------------------------------
+# 10. 다운로드 버튼 찾기 (기존 함수 유지)
+# ------------------------------------------------
 def find_download_button(driver):
     """다양한 방법으로 다운로드 버튼을 찾습니다."""
     print("[INFO] 다운로드 버튼 찾기 시작...")
@@ -314,6 +428,9 @@ def find_download_button(driver):
     print("[WARN] 모든 방법으로 다운로드 버튼을 찾지 못함")
     return None
 
+# ------------------------------------------------
+# 11. 다운로드 실행 (기존 함수 유지)
+# ------------------------------------------------
 def execute_download(driver, download_button=None):
     """다운로드 버튼을 찾고 클릭합니다."""
     if not download_button:
@@ -381,6 +498,9 @@ def execute_download(driver, download_button=None):
     
     return False
 
+# ------------------------------------------------
+# 12. XLSX 파일 관련 유틸 (기존 함수 유지)
+# ------------------------------------------------
 def get_latest_xlsx(download_dir: str) -> str | None:
     files = glob.glob(os.path.join(download_dir, "*.xlsx"))
     return max(files, key=os.path.getctime) if files else None
@@ -436,7 +556,7 @@ def parse_excel(path: str):
     )
 
 # ------------------------------------------------
-# 7. 시트 기록
+# 13. 스프레드시트 기록 (기존 함수 유지)
 # ------------------------------------------------
 def write_metrics_to_sheet(exposure, reached, reactions, comments, reposts, row_idx: int):
     rng = f"{SHEET_NAME}!C{row_idx}:G{row_idx}"
@@ -452,19 +572,80 @@ def write_post_time_to_sheet(post_time: str):
     ).execute()
 
 # ------------------------------------------------
-# 8. 메인
+# 14. 쿠키 관리 함수 (새 함수 추가)
+# ------------------------------------------------
+def save_cookies(driver, path="linkedin_cookies.pkl"):
+    """현재 세션의 쿠키를 저장합니다."""
+    try:
+        with open(path, 'wb') as file:
+            pickle.dump(driver.get_cookies(), file)
+        print(f"[INFO] 쿠키 저장 완료: {path}")
+        return True
+    except Exception as e:
+        print(f"[WARN] 쿠키 저장 실패: {e}")
+        return False
+
+def load_cookies(driver, path="linkedin_cookies.pkl"):
+    """저장된 쿠키를 로드합니다."""
+    try:
+        if not os.path.exists(path):
+            print(f"[INFO] 쿠키 파일이 없습니다: {path}")
+            return False
+        
+        with open(path, 'rb') as file:
+            cookies = pickle.load(file)
+        
+        # LinkedIn 도메인에 접속 후 쿠키 추가
+        driver.get("https://www.linkedin.com")
+        for cookie in cookies:
+            # 일부 브라우저에서는 expiry 항목이 문제 발생
+            if 'expiry' in cookie:
+                del cookie['expiry']
+            driver.add_cookie(cookie)
+        
+        print(f"[INFO] 쿠키 로드 완료: {path}")
+        return True
+    except Exception as e:
+        print(f"[WARN] 쿠키 로드 실패: {e}")
+        return False
+
+# ------------------------------------------------
+# 15. 메인 (수정됨)
 # ------------------------------------------------
 def main():
     dl_dir = os.path.join(os.path.expanduser("~"), "Downloads")
     driver = init_driver(dl_dir)
 
     try:
-        if not login_linkedin(driver):
-            print("[ERROR] LinkedIn 로그인 실패")
-            driver.save_screenshot("screen.png")
+        # 쿠키 로드 시도 (선택적)
+        cookie_loaded = load_cookies(driver)
+        if cookie_loaded:
+            # 쿠키 로드 성공했다면 세션 확인
+            driver.get("https://www.linkedin.com/feed/")
+            time.sleep(3)
+            if "login" not in driver.current_url:
+                print("[INFO] 저장된 쿠키로 로그인 성공")
+            else:
+                print("[INFO] 쿠키 만료, 일반 로그인 시도")
+                cookie_loaded = False
+        
+        # 쿠키 로드 실패 또는 만료 시 일반 로그인
+        if not cookie_loaded:
+            if not login_linkedin(driver):
+                print("[ERROR] LinkedIn 로그인 실패")
+                driver.save_screenshot("login_failed.png")
+                driver.quit()
+                sys.exit(1)
+            print("자동 로그인 성공")
+            
+            # 로그인 성공 시 쿠키 저장
+            save_cookies(driver)
+        
+        # 추가: 인증 확인 단계
+        if not handle_login_verification(driver):
+            print("[ERROR] 보안 인증 페이지 감지됨")
             driver.quit()
             sys.exit(1)
-        print("자동 로그인 성공")
 
         url = get_analytics_url()
         if not url:
@@ -476,7 +657,14 @@ def main():
         driver.get(url)
         print("[INFO] 페이지 로드 시작...")
         
-        # 페이지 로드 확인 (개선된 함수 사용)
+        # 수정: 개선된 페이지 로드 대기
+        if not wait_for_analytics_page(driver, timeout=90):
+            print("[ERROR] Analytics 페이지 로드 실패")
+            driver.save_screenshot("analytics_page_failed.png")
+            driver.quit()
+            sys.exit(1)
+            
+        # 기존 로직도 유지
         wait_for_page_load(driver, timeout=60)
         
         # 디버깅을 위한 페이지 구조 분석
