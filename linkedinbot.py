@@ -108,7 +108,7 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options = Options()
     # CI 환경(Linux)에서만 chromium-browser 사용
     if platform.system() == "Linux":
-        chrome_options.binary_location = "/usr/bin/chromium-browser"
+        chrome_options.binary_location = "/usr/bin/google-chrome"
 
     # 헤드리스 모드 (새 Chrome 헤드리스)
     chrome_options.add_argument("--headless=new")
@@ -116,6 +116,8 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--remote-debugging-port=9222")  # 추가
+    chrome_options.add_argument("--disable-extensions")  # 추가
     # UI 언어 고정이 필요하면 주석 해제
     # chrome_options.add_argument("--lang=ko-KR")
 

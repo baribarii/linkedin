@@ -31,7 +31,9 @@ jobs:
       - name: Install Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium-browser
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          google-chrome --version  # 설치된 Chrome 버전 확인
 
       - name: Run LinkedIn Bot
         env:
@@ -52,8 +54,8 @@ jobs:
           path: screen.png
           if-no-files-found: ignore
 
-      - name: Install Google Chrome Stable
+      - name: Debug Chrome installation
         run: |
-          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get update
-          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          which google-chrome
+          google-chrome --version
+          ls -la /usr/bin/google-chrome*
