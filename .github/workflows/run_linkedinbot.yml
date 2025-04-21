@@ -35,38 +35,16 @@ jobs:
           sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
           google-chrome --version  # 설치된 Chrome 버전 확인
 
-      - name: Run LinkedIn Bot
-        env:
-          LINKEDIN_GOOGLESHEET_API: ${{ secrets.LINKEDIN_GOOGLESHEET_API }}
-          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
-          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
-        run: |
-          python linkedinbot.py
-
-      - name: List files after run (debug)
-        run: ls -al
-
-      - name: Upload all screenshots and logs
-        uses: actions/upload-artifact@v4
-        if: ${{ always() }} # 성공/실패 상관없이 항상 실행
-        with:
-          name: debug-files
-          path: |
-            *.png
-            *.html
-            *.log
-          if-no-files-found: ignore
-
       - name: Debug Chrome installation
         run: |
           which google-chrome
           google-chrome --version
           ls -la /usr/bin/google-chrome*
 
-          - name: Debug network conditions
-          run: |
-            ping -c 4 linkedin.com
-            curl -I https://www.linkedin.com
+      - name: Debug network conditions
+        run: |
+          ping -c 4 linkedin.com
+          curl -I https://www.linkedin.com
 
       - name: Install additional dependencies for LinkedIn
         run: |
@@ -83,3 +61,18 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 3
           python linkedinbot.py
+
+      - name: List files after run (debug)
+        run: ls -al
+
+      - name: Upload all screenshots and logs
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }} # 성공/실패 상관없이 항상 실행
+        with:
+          name: debug-files
+          path: |
+            *.png
+            *.html
+            *.log
+            linkedin_cookies.pkl
+          if-no-files-found: ignore
