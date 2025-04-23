@@ -16,6 +16,7 @@ import base64
 import platform
 import pandas as pd
 import pickle
+import random
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -23,7 +24,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+# 주석 처리: 웹드라이버 매니저를 사용하지 않음
+# from webdriver_manager.chrome import ChromeDriverManager 
 
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
@@ -106,8 +108,6 @@ def get_next_row_index() -> int:
 # 4. Selenium 웹드라이버 (로컬 + CI 공통) - 개선됨
 # ------------------------------------------------
 def init_driver(download_dir: str) -> webdriver.Chrome:
-    import random  # 함수 상단에 추가
-    
     chrome_options = Options()
     # CI 환경(Linux)에서만 chromium-browser 사용
     if platform.system() == "Linux":
@@ -161,7 +161,14 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     }
     chrome_options.add_experimental_option("prefs", prefs)
 
-    service_obj = Service(ChromeDriverManager().install())
+    # 변경: ChromeDriverManager 대신 직접 설치된 드라이버 사용
+    if platform.system() == "Linux":
+        service_obj = Service('/usr/local/bin/chromedriver')
+    else:
+        # 로컬 환경에서는 webdriver-manager를 시도할 수 있음
+        from webdriver_manager.chrome import ChromeDriverManager
+        service_obj = Service(ChromeDriverManager().install())
+    
     driver = webdriver.Chrome(service=service_obj, options=chrome_options)
     
     # WebDriver 속성 마스킹
