@@ -81,3 +81,9 @@ jobs:
             *.log
             linkedin_cookies.pkl
           if-no-files-found: ignore
+
+      - name: Get current IP
+        run: |
+          curl -s https://api.ipify.org
+          # 또는
+          curl -s http://checkip.amazonaws.com
