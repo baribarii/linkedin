@@ -42,21 +42,26 @@ jobs:
           ls -la /usr/bin/google-chrome*
 
       - name: Debug network conditions
+        continue-on-error: true # 오류가 발생해도 계속 진행
         run: |
-          ping -c 4 linkedin.com
-          curl -I https://www.linkedin.com
+          ping -c 4 linkedin.com || echo "Ping failed but continuing..."
+          curl -I --proxy ${{ secrets.HTTP_PROXY }} https://www.linkedin.com
 
       - name: Install additional dependencies for LinkedIn
         run: |
           sudo apt-get install -y xvfb
           pip install pyvirtualdisplay
 
-      - name: Run LinkedIn Bot with Xvfb
+      # LinkedIn Bot 실행 단계 수정
+      - name: Run LinkedIn Bot with Xvfb and Proxy
         env:
           LINKEDIN_GOOGLESHEET_API: ${{ secrets.LINKEDIN_GOOGLESHEET_API }}
           LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
           LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
           DISPLAY: ':99'
+          # 프록시 환경변수 추가
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
         run: |
           Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 3

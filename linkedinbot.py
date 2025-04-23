@@ -106,6 +106,8 @@ def get_next_row_index() -> int:
 # 4. Selenium 웹드라이버 (로컬 + CI 공통) - 개선됨
 # ------------------------------------------------
 def init_driver(download_dir: str) -> webdriver.Chrome:
+    import random  # 함수 상단에 추가
+    
     chrome_options = Options()
     # CI 환경(Linux)에서만 chromium-browser 사용
     if platform.system() == "Linux":
@@ -121,26 +123,35 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument("--disable-extensions")
     
-    # 봇 탐지 방지 추가 설정 (개선)
+    # 봇 탐지 방지 추가 설정
     chrome_options.add_argument("--disable-blink-features")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     
-    # 쿠키 및 캐시 활성화 (추가)
+    # 쿠키 및 캐시 활성화
     chrome_options.add_argument("--enable-cookies")
     chrome_options.add_argument("--profile-directory=Default")
     
-    # 더 현실적인 사용자 에이전트 (최신 버전으로 업데이트)
-    chrome_options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-    )
+    # 프록시 설정 추가
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if proxy:
+        print(f"[INFO] 프록시 사용: {proxy}")
+        chrome_options.add_argument(f'--proxy-server={proxy}')
+    
+    # User Agent 랜덤화
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    ]
+    chosen_user_agent = random.choice(user_agents)
+    print(f"[INFO] 선택된 User-Agent: {chosen_user_agent}")
+    chrome_options.add_argument(f'--user-agent={chosen_user_agent}')
     
     # 추가 실행 옵션
     chrome_options.add_argument("--lang=en-US,en;q=0.9")
-
     chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
     chrome_options.add_experimental_option('useAutomationExtension', False)
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     
     prefs = {
         "download.default_directory": download_dir,
@@ -153,7 +164,7 @@ def init_driver(download_dir: str) -> webdriver.Chrome:
     service_obj = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service_obj, options=chrome_options)
     
-    # WebDriver 속성 마스킹 (추가 JavaScript 실행)
+    # WebDriver 속성 마스킹
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     
     return driver
@@ -614,13 +625,20 @@ def load_cookies(driver, path="linkedin_cookies.pkl"):
 # ------------------------------------------------
 def main():
     dl_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-    driver = init_driver(dl_dir)
-
+    
+    # 프록시 설정 확인 (GitHub Actions에서 환경변수로 전달됨)
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if proxy:
+        print(f"[INFO] 프록시 설정 감지: {proxy}")
+    else:
+        print("[WARN] 프록시가 설정되지 않았습니다. LinkedIn 접속이 차단될 수 있습니다.")
+    
     try:
-        # 쿠키 로드 시도 (선택적)
+        driver = init_driver(dl_dir)
+        
+        # 쿠키 로드 시도
         cookie_loaded = load_cookies(driver)
         if cookie_loaded:
-            # 쿠키 로드 성공했다면 세션 확인
             driver.get("https://www.linkedin.com/feed/")
             time.sleep(3)
             if "login" not in driver.current_url:
@@ -641,12 +659,14 @@ def main():
             # 로그인 성공 시 쿠키 저장
             save_cookies(driver)
         
-        # 추가: 인증 확인 단계
+        # 보안 인증 확인
         if not handle_login_verification(driver):
             print("[ERROR] 보안 인증 페이지 감지됨")
+            driver.save_screenshot("security_challenge.png")
             driver.quit()
             sys.exit(1)
 
+        # URL 가져오기
         url = get_analytics_url()
         if not url:
             print("[ERROR] Analytics URL을 가져오지 못함")
@@ -654,37 +674,38 @@ def main():
             sys.exit(1)
         print("[INFO] Analytics URL:", url)
 
+        # 페이지 로드
         driver.get(url)
         print("[INFO] 페이지 로드 시작...")
         
-        # 수정: 개선된 페이지 로드 대기
+        # Analytics 페이지 로드 대기 (향상된 대기 로직)
         if not wait_for_analytics_page(driver, timeout=90):
             print("[ERROR] Analytics 페이지 로드 실패")
             driver.save_screenshot("analytics_page_failed.png")
             driver.quit()
             sys.exit(1)
             
-        # 기존 로직도 유지
+        # 기존 로직 유지
         wait_for_page_load(driver, timeout=60)
         
         # 디버깅을 위한 페이지 구조 분석
         analyze_page_structure(driver)
         
-        # 스크린샷 생성
+        # 다운로드 전 스크린샷
         driver.save_screenshot("screen_before_download.png")
         
-        # 개선된 다운로드 실행
+        # 다운로드 실행
         if not execute_download(driver):
             print("[ERROR] 다운로드 실패")
-            driver.save_screenshot("screen.png")
+            driver.save_screenshot("download_failed.png")
             driver.quit()
             sys.exit(1)
         
-        # 나머지 파일 처리 및 시트 업데이트 로직
+        # 파일 처리 및 시트 업데이트
         xlsx = get_latest_xlsx(dl_dir)
         if not xlsx:
             print("[ERROR] XLSX 파일을 찾지 못함")
-            driver.save_screenshot("screen.png")
+            driver.save_screenshot("no_xlsx_found.png")
             driver.quit()
             sys.exit(1)
 
@@ -695,18 +716,20 @@ def main():
         write_post_time_to_sheet(post_time)
         print(f"[INFO] 시트 기록 완료 (행 {row})")
 
+        # 임시 파일 정리
         try:
             os.remove(xlsx)
         except Exception as e:
             print("임시 파일 삭제 실패:", e)
 
+        # 작업 완료
         driver.quit()
         print("[INFO] 작업 완료")
         
     except Exception as e:
         print(f"[ERROR] 예기치 않은 오류 발생: {e}")
         try:
-            driver.save_screenshot("screen_error.png")
+            driver.save_screenshot("unexpected_error.png")
         except:
             pass
         driver.quit()
