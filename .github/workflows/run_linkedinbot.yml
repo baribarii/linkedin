@@ -12,14 +12,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
-      # IP 확인 단계를 앞부분으로 이동 (맨 앞에 배치)
-      - name: Get current IP for Webshare whitelist
+      # 프록시 없이 실제 IP 확인
+      - name: Get actual GitHub Actions runner IP
         id: ip
+        env:
+          # 프록시 설정 비활성화
+          HTTP_PROXY: ''
+          HTTPS_PROXY: ''
         run: |
-          echo "Current GitHub Actions Runner IP:"
-          CURRENT_IP=$(curl -s https://api.ipify.org)
-          echo "IP: $CURRENT_IP (Add this IP to Webshare allowlist)"
-          echo "runner_ip=$CURRENT_IP" >> $GITHUB_OUTPUT
+          echo "Current GitHub Actions Runner IP (add this to Webshare):"
+          ACTUAL_IP=$(curl -s https://api.ipify.org)
+          echo "IP: $ACTUAL_IP"
+          echo "runner_ip=$ACTUAL_IP" >> $GITHUB_OUTPUT
 
       - name: Debug file list
         run: |
@@ -51,30 +55,30 @@ jobs:
           ls -la /usr/bin/google-chrome*
 
       - name: Debug network conditions
-        continue-on-error: true # 오류가 발생해도 계속 진행
+        continue-on-error: true
+        env:
+          # 프록시 설정 비활성화하여 실제 네트워크 상태 확인
+          HTTP_PROXY: ''
+          HTTPS_PROXY: ''
         run: |
           ping -c 4 linkedin.com || echo "Ping failed but continuing..."
-          curl -I --proxy ${{ secrets.HTTP_PROXY }} https://www.linkedin.com
+          echo "Runner IP for Webshare: $(curl -s https://api.ipify.org)"
 
       - name: Install additional dependencies for LinkedIn
         run: |
           sudo apt-get install -y xvfb
           pip install pyvirtualdisplay
 
-      # LinkedIn Bot 실행 단계 수정
+      # LinkedIn Bot 실행 단계
       - name: Run LinkedIn Bot with Xvfb and Proxy
         env:
           LINKEDIN_GOOGLESHEET_API: ${{ secrets.LINKEDIN_GOOGLESHEET_API }}
           LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
           LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
           DISPLAY: ':99'
-          # 프록시 환경변수 추가
           HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
           HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
         run: |
-          # 실행 전 IP 다시 확인
-          echo "Please verify this IP is added to Webshare allowlist: $(curl -s https://api.ipify.org)"
-
           Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 3
           python linkedinbot.py
@@ -84,7 +88,7 @@ jobs:
 
       - name: Upload all screenshots and logs
         uses: actions/upload-artifact@v4
-        if: ${{ always() }} # 성공/실패 상관없이 항상 실행
+        if: ${{ always() }}
         with:
           name: debug-files
           path: |
