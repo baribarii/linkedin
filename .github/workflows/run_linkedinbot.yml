@@ -12,6 +12,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
+      # IP 확인 단계를 앞부분으로 이동 (맨 앞에 배치)
+      - name: Get current IP for Webshare whitelist
+        id: ip
+        run: |
+          echo "Current GitHub Actions Runner IP:"
+          CURRENT_IP=$(curl -s https://api.ipify.org)
+          echo "IP: $CURRENT_IP (Add this IP to Webshare allowlist)"
+          echo "runner_ip=$CURRENT_IP" >> $GITHUB_OUTPUT
+
       - name: Debug file list
         run: |
           ls -al
@@ -63,6 +72,9 @@ jobs:
           HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
           HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
         run: |
+          # 실행 전 IP 다시 확인
+          echo "Please verify this IP is added to Webshare allowlist: $(curl -s https://api.ipify.org)"
+
           Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 3
           python linkedinbot.py
@@ -81,9 +93,3 @@ jobs:
             *.log
             linkedin_cookies.pkl
           if-no-files-found: ignore
-
-      - name: Get current IP
-        run: |
-          curl -s https://api.ipify.org
-          # 또는
-          curl -s http://checkip.amazonaws.com
